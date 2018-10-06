@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# personal additions
+.ftpignore
+archive/
+backup/
+app/public/uploads
+app/public/uploads/
+*-bak.*
+*-orig.*
+*-dev.*
