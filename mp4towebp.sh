@@ -2,13 +2,13 @@
 
 #************************************************
 #                mp4towebp.sh                   *
-#                  v1.1.0                       *
+#                  v2.0.0                       *
 # developer: SCG82 (scg082+mp4towebp@gmail.com) *
 #************************************************
 
-USAGE_S="Usage: $0 -w width -h height -n [select every nth frame] -p preset -m [0-6] -q [quality level: 0-100] -a [alpha-quality: 0-100] -f [filter level: 0-100, af] -l [1+ = # of times to repeat, 0 = infinite] -s [start time hh:mm:ss] -e [end time hh:mm:ss] FILE"
-USAGE="Usage (arguments are optional): $0 -w [output width] -h [output height] -n [select every nth frame] -p [preset: default,photo,picture,drawing,icon,text] -m [compression method: (0=fast, 6=slow)] -q [quality level: 0-100 (90)] -a [alpha-quality: 0-100 (100)] -f [filter level: 0-100, af (af)] -l [1+ = # of times to repeat, 0 = infinite] -s [start time hh:mm:ss] -e [end time hh:mm:ss] FILE"
-VERSION="1.1.0"
+USAGE_S="Usage: $0 -w width -h height -n [select every nth frame] -p preset -z [0-9] -m [0-6] -q [quality level: 0-100] -a [alpha-quality: 0-100] -f [filter level: 0-100, af] -l [1+ = # of times to repeat, 0 = infinite] -s [start time hh:mm:ss] -e [end time hh:mm:ss] FILE"
+USAGE="Usage (arguments are optional): $0 -w [output width] -h [output height] -n [select every nth frame] -p [preset: default,photo,picture,drawing,icon,text] -z [lossless preset: (0=fast, 9=slow)] -m [compression method: (0=fast, 6=slow)] -q [quality level: 0-100 (90)] -a [alpha-quality: 0-100 (100)] -f [filter level: 0-100, af (af)] -l [1+ = # of times to repeat, 0 = infinite] -s [start time hh:mm:ss] -e [end time hh:mm:ss] FILE"
+VERSION="2.0.0"
 
 # if filename not supplied display usage message and die
 [ $# -eq 0 ] && { echo "$USAGE_S"; exit 1; }
@@ -19,12 +19,14 @@ vsize=-1
 fps=30
 n=1
 preset="default"
-m=6
+lossless=0
+z=6
+m=5
 q=90
 aq=100
 sns=80
-#f=30
-f=af
+f=30
+# f=af
 #use_af=0
 use_af=1
 sharp=3
@@ -38,12 +40,14 @@ aspect_changed=0
 
 pix_fmt="yuv420p"
 
+in_color_range="tv"
+
 in_width=1920
 in_height=1080
 
 out_height=-1
 
-while getopts ":w:h:n:p:m:q:a:f:l:s:e:vH" optname
+while getopts ":w:h:n:p:z:m:q:a:f:l:s:e:vH" optname
 	do
 		case "$optname" in
 			"v")
@@ -77,6 +81,14 @@ while getopts ":w:h:n:p:m:q:a:f:l:s:e:vH" optname
 					preset=$OPTARG
 				else
 					echo "invalid preset: \"$OPTARG\"" && exit 1
+				fi
+			;;
+			"z")
+				if [[ "$OPTARG" =~ ^[0-9]+$ ]] && [ "$OPTARG" -ge 0 ] && [ "$OPTARG" -le 9 ]; then
+					z=$OPTARG
+					lossless=1
+				else
+					echo "invalid entry for z: \"$OPTARG\"" && exit 1
 				fi
 			;;
 			"m")
@@ -179,27 +191,47 @@ fps=$(echo "scale=4; $fps_num / $fps_den" | bc)
 
 out_fps=$(echo "scale=4; $fps / $n" | bc)
 
+in_width=$(ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+in_height=$(ffprobe -v error -show_entries stream=height -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+
+in_sar_raw=$(ffprobe -v error -show_entries stream=sample_aspect_ratio -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+
+in_sar_num=${in_sar_raw%%:*}
+in_sar_den=${in_sar_raw##*:}
+
+in_sar=$(echo "scale=4; $in_sar_num / $in_sar_den" | bc)
+
+if [ $hsize -ne -1 ]; then
+	out_width=$hsize
+else
+	out_width=$in_width
+fi
+
+out_height_calc="($out_width*$in_height*$in_sar_den)/($in_width*$in_sar_num)"
+out_height_bc=$(echo "scale=2; ($out_height_calc+0.5)/1" | bc)
+out_height=$(echo "scale=0; $out_height_bc/1" | bc)
+
+if [ $vsize -ne -1 ]; then
+	if [ $out_height -ne $vsize ]; then
+		aspect_changed=1
+	fi
+	out_height=$vsize
+fi
+
 if [ $loop -eq 0 ]; then
 	echo "loop:    infinite"
 else
 	echo "loop:    $loop"
 fi
 
-echo "width:   $hsize pixels"
-
-if [ $vsize -ne -1 ]; then
-	echo "height:  $vsize pixels"
-fi
-
-echo "in  fps: $fps"
-echo "out fps: $out_fps"
-
 #duration=$((n*1000/fps))
 duration=$(echo "scale=0; $n * 1000 / $fps" | bc)
 
-pix_fmt_probe=$(ffprobe -v error -show_entries stream=pix_fmt -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+# color_range_probe=$(ffprobe -v error -show_entries stream=color_range -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+# color_space_probe=$(ffprobe -v error -show_entries stream=color space -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+# color_primaries_probe=$(ffprobe -v error -show_entries stream=color_primaries -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
 
-echo "input  pixel format:  $pix_fmt_probe"
+pix_fmt_probe=$(ffprobe -v error -show_entries stream=pix_fmt -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
 
 if [[ "$pix_fmt_probe" =~ ^unknown$ ]]; then
 	pix_fmt="yuv420p"
@@ -226,36 +258,25 @@ else
 	has_alpha=0
 fi
 
-echo "output pixel format: $pix_fmt"
 echo "select 1 of every $n frames"
-echo "m = $m"
+echo "in  fps: $fps"
+echo "out fps: $out_fps"
+if [ $lossless -eq 1 ]; then
+	echo "lossless compression"
+	echo "z = $z"
+else
+	echo "lossy compression"
+	echo "m = $m"
+fi
 echo "q = $q"
 echo "a = $aq (alpha quality)"
 echo "filter strength:  $f"
 echo "filter sharpness: $sharp"
 
-in_width=$(ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
-in_height=$(ffprobe -v error -show_entries stream=height -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
+echo "input  pixel format: $pix_fmt_probe"
+echo "output pixel format: $pix_fmt"
 
-in_sar_raw=$(ffprobe -v error -show_entries stream=sample_aspect_ratio -of default=noprint_wrappers=1:nokey=1 -select_streams v:0 "$_file")
-
-in_sar_num=${in_sar_raw%%:*}
-in_sar_den=${in_sar_raw##*:}
-
-in_sar=$(echo "scale=4; $in_sar_num / $in_sar_den" | bc)
-
-out_width=$hsize
-out_height_calc="($out_width*$in_height*$in_sar_den)/($in_width*$in_sar_num)"
-out_height_bc=$(echo "scale=2; ($out_height_calc+0.5)/1" | bc)
-out_height=$(echo "scale=0; $out_height_bc/1" | bc)
-
-if [ $vsize -ne -1 ]; then
-	if [ $out_height -ne $vsize ]; then
-		aspect_changed=1
-	fi
-	out_height=$vsize
-fi
-
+echo "input  size: $in_width x $in_height"
 echo "output size: $out_width x $out_height"
 
 if [ $aspect_changed -eq 1 ]; then
@@ -271,21 +292,41 @@ mkdir "${TEMPDIR}/frames"
 
 FRAMESDIR="${TEMPDIR}/frames"
 
+# filter="select=not(mod(n\,${n})),scale=${out_width}:${out_height}"
 filter="select=not(mod(n\,${n})),scale=${out_width}:${out_height}"
 sws_flags="lanczos+accurate_rnd+full_chroma_int+full_chroma_inp+bitexact"
 
 echo "extracting frames..."
-
-if [ $is_yuv -eq 1 ]; then
-	if [ $has_end -eq 1 ]; then
-		ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.raw
-	elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
-		ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.raw
+if [ $lossless -eq 0 ]; then
+	if [ $is_yuv -eq 1 ]; then
+		if [ $has_end -eq 1 ]; then
+			ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.raw
+		elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
+			ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.raw
+		else
+			ffmpeg -hide_banner -loglevel panic -i "$_file" -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.raw
+		fi
 	else
-		ffmpeg -hide_banner -loglevel panic -i "$_file" -f image2 -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.raw
+		if [ $has_alpha -eq 1 ]; then
+			if [ $has_end -eq 1 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
+			elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
+			else
+				ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.png
+			fi
+		else
+			if [ $has_end -eq 1 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
+			elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
+			else
+				ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.png
+			fi
+		fi
 	fi
 else
-	if [ $has_alpha -eq 1 ]; then
+	if [ $is_yuv -eq 0 ]; then
 		if [ $has_end -eq 1 ]; then
 			ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
 		elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
@@ -294,12 +335,22 @@ else
 			ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.png
 		fi
 	else
-		if [ $has_end -eq 1 ]; then
-			ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
-		elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
-			ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "${FRAMESDIR}"/frame%05d.png
+		if [ $has_alpha -eq 1 ]; then
+			if [ $has_end -eq 1 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgba "${FRAMESDIR}"/frame%05d.png
+			elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgba "${FRAMESDIR}"/frame%05d.png
+			else
+				ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgba "$FRAMESDIR"/frame%05d.png
+			fi
 		else
-			ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt $pix_fmt "$FRAMESDIR"/frame%05d.png
+			if [ $has_end -eq 1 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -to $endtime -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgb24 "${FRAMESDIR}"/frame%05d.png
+			elif [ $has_start -eq 1 ] && [ $has_end -eq 0 ]; then
+				ffmpeg -hide_banner -loglevel panic -ss $start -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgb24 "${FRAMESDIR}"/frame%05d.png
+			else
+				ffmpeg -hide_banner -loglevel panic -i "$_file" -vf "$filter" -sws_flags "$sws_flags" -vsync vfr -pix_fmt rgb24 "$FRAMESDIR"/frame%05d.png
+			fi
 		fi
 	fi
 fi
@@ -312,21 +363,31 @@ WEBPDIR="${FRAMESDIR}/webp"
 
 echo "building animated webP file..."
 
-if [ $use_af -eq 1 ]; then
-	if [ $is_yuv -eq 1 ]; then
-		for frame in *.raw; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -af -sharpness $sharp -alpha_filter best -quiet -s $out_width $out_height "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
-	elif [ $has_alpha -eq 1 ]; then
-		for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -af -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+if [ $lossless -eq 0 ]; then
+	if [ $use_af -eq 1 ]; then
+		if [ $is_yuv -eq 1 ]; then
+			for frame in *.raw; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -af -sharpness $sharp -alpha_filter best -quiet -s $out_width $out_height "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		elif [ $has_alpha -eq 1 ]; then
+			for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -af -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		else
+			for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -sns $sns -af -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		fi
 	else
-		for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -sns $sns -af -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		if [ $is_yuv -eq 1 ]; then
+			for frame in *.raw; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -alpha_filter best -quiet -s $out_width $out_height "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		elif [ $has_alpha -eq 1 ]; then
+			for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		else
+			for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -sns $sns -f $f -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		fi
 	fi
 else
 	if [ $is_yuv -eq 1 ]; then
-		for frame in *.raw; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -alpha_filter best -quiet -s $out_width $out_height "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		for frame in *.png; do cwebp -mt -preset $preset -lossless -z $z -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
 	elif [ $has_alpha -eq 1 ]; then
-		for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		for frame in *.png; do cwebp -mt -preset $preset -lossless -z $z -q $q -alpha_q $aq -sns $sns -f $f -sharpness $sharp -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
 	else
-		for frame in *.png; do cwebp -mt -preset $preset -m $m -q $q -sns $sns -f $f -sharpness $sharp -sharp_yuv -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
+		for frame in *.png; do cwebp -mt -preset $preset -lossless -z $z -q $q -noalpha -sns $sns -f $f -sharpness $sharp -alpha_filter best -quiet "$frame" -o "${WEBPDIR}/${frame%.*}.webp"; done
 	fi
 fi
 
